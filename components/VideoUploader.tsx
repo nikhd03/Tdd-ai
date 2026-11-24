@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent } from "react";
 import { formatBytes } from "@/lib/format";
 import type { ActivityEvent, UploadStatus } from "@/lib/types";
-import { recordVideoTrigger } from "@/lib/activity";
+import { recordVideoTrigger, syncVideosTriggeredToday } from "@/lib/activity";
 
 const UPLOAD_ENDPOINT = process.env.NEXT_PUBLIC_UPLOAD_ENDPOINT ?? "";
 const FIELD_NAME = process.env.NEXT_PUBLIC_UPLOAD_FIELD_NAME || "file";
@@ -79,6 +79,9 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
   const inputRef = useRef<HTMLInputElement>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
   const dragDepth = useRef(0);
+  const uploading = status === "uploading";
+  const localSelectionDisabled = uploading || Boolean(selectedDriveFile);
+  const driveSelectionDisabled = uploading || Boolean(file);
 
   useEffect(() => () => xhrRef.current?.abort(), []);
 
@@ -139,6 +142,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
   }, []);
 
   const selectFolder = async (folderId: string) => {
+    if (driveSelectionDisabled) return;
     const folder = folders.find((item) => item.id === folderId) ?? null;
     setSelectedFolder(folder);
     setSelectedDriveFile(null);
@@ -196,6 +200,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
   };
 
   const selectDriveFile = (fileId: string) => {
+    if (driveSelectionDisabled) return;
     const driveFile = files.find((item) => item.id === fileId) ?? null;
     setSelectedDriveFile(driveFile);
     setDriveMessage(null);
@@ -203,7 +208,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
   };
 
   const selectFile = useCallback((candidate: File | undefined | null) => {
-    if (!candidate) return;
+    if (!candidate || localSelectionDisabled) return;
     setSelectedDriveFile(null);
     const error = validateFile(candidate);
     if (error) {
@@ -213,10 +218,12 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
       return;
     }
     setFile(candidate);
+    setSelectedFolder(null);
+    setFiles([]);
     setStatus("idle");
     setProgress(0);
     setMessage(null);
-  }, []);
+  }, [localSelectionDisabled]);
 
   const onInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     selectFile(e.target.files?.[0]);
@@ -225,23 +232,25 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
 
   const onDragEnter = (e: DragEvent) => {
     e.preventDefault();
+    if (localSelectionDisabled) return;
     dragDepth.current += 1;
     setIsDragging(true);
   };
   const onDragLeave = (e: DragEvent) => {
     e.preventDefault();
+    if (localSelectionDisabled) return;
     dragDepth.current = Math.max(0, dragDepth.current - 1);
     if (dragDepth.current === 0) setIsDragging(false);
   };
   const onDragOver = (e: DragEvent) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
+    e.dataTransfer.dropEffect = localSelectionDisabled ? "none" : "copy";
   };
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     dragDepth.current = 0;
     setIsDragging(false);
-    if (status === "uploading") return;
+    if (localSelectionDisabled) return;
     const files = e.dataTransfer.files;
     if (files.length > 1) {
       setStatus("error");
@@ -252,7 +261,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
   };
 
   const openPicker = () => {
-    if (status !== "uploading") inputRef.current?.click();
+    if (!localSelectionDisabled) inputRef.current?.click();
   };
   const onZoneKey = (e: KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -267,6 +276,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
       setProgress(0);
       setDriveMessage(null);
       recordVideoTrigger();
+      void syncVideosTriggeredToday();
       onActivity?.({
         category: "upload",
         status: "started",
@@ -339,6 +349,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
     form.append("size", String(file.size));
     form.append("uploadedAt", new Date().toISOString());
     recordVideoTrigger();
+    void syncVideosTriggeredToday();
     onActivity?.({
       category: "upload",
       status: "started",
@@ -432,8 +443,6 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
     setMessage(null);
   };
 
-  const uploading = status === "uploading";
-
   return (
     <section className="panel">
       <header className="panel-header">
@@ -455,7 +464,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
               className="input select-input"
               value={selectedFolder?.id ?? ""}
               onChange={(event) => void selectFolder(event.target.value)}
-              disabled={folderLoading}
+              disabled={folderLoading || driveSelectionDisabled}
             >
               <option value="">
                 {folderLoading ? "Loading folders..." : folders.length ? "Select a folder" : "No folders available"}
@@ -473,7 +482,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
               className="input select-input"
               value={selectedDriveFile?.id ?? ""}
               onChange={(event) => void selectDriveFile(event.target.value)}
-              disabled={!selectedFolder || fileLoading}
+              disabled={!selectedFolder || fileLoading || driveSelectionDisabled}
             >
               <option value="">
                 {fileLoading
@@ -512,9 +521,28 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
                     {selectedDriveFile.mimeType || selectedDriveFile.type || ""}
                   </span>
                 )}
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() => selectDriveFile("")}
+                  disabled={uploading}
+                >
+                  Clear Drive selection
+                </button>
               </div>
             )}
           </div>
+        )}
+
+        {selectedDriveFile && (
+          <p className="selection-mode-hint">
+            Google Drive video selected. Local video upload is disabled; clear the Drive selection to switch sources.
+          </p>
+        )}
+        {file && (
+          <p className="selection-mode-hint">
+            Local video selected. Google Drive selection is disabled; remove this video to switch sources.
+          </p>
         )}
 
         {driveMessage && (
@@ -524,7 +552,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
         <div
           role="button"
           tabIndex={0}
-          aria-disabled={uploading}
+          aria-disabled={localSelectionDisabled}
           aria-label="Choose or drop a video file"
           onClick={openPicker}
           onKeyDown={onZoneKey}
@@ -541,7 +569,7 @@ export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderP
             <strong>Click to choose</strong> or drag a video here
           </p>
           <p className="helper-text">MP4, MOV, WEBM, MKV, AVI · up to {MAX_UPLOAD_MB} MB</p>
-          <input ref={inputRef} type="file" accept={ACCEPT} className="hidden" onChange={onInputChange} disabled={uploading} />
+          <input ref={inputRef} type="file" accept={ACCEPT} className="hidden" onChange={onInputChange} disabled={localSelectionDisabled} />
         </div>
 
         {file && (

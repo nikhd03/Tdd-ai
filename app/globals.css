@@ -407,6 +407,12 @@ pre {
   font-size: var(--font-size-caption);
 }
 
+.selection-mode-hint {
+  margin: -8px 0 14px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}
+
 .drive-notice {
   margin: 0 0 16px;
 }

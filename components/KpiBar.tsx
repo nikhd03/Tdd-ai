@@ -34,7 +34,7 @@ export default function KpiBar({ kpis }: KpiBarProps) {
       <article className="kpi-card">
         <span className="kpi-label">Videos today</span>
         <strong className="kpi-value">{kpis.videosTriggeredToday}</strong>
-        <span className="kpi-caption">Local + Google Drive</span>
+        <span className="kpi-caption">n8n · Google Sheets</span>
       </article>
 
       <article className="kpi-card">

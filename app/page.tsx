@@ -12,6 +12,7 @@ import {
   appendActivity,
   getVideosTriggeredToday,
   loadActivities,
+  syncVideosTriggeredToday,
 } from "@/lib/activity";
 import type {
   ActivityEvent,
@@ -45,6 +46,7 @@ export default function DashboardPage() {
       }));
     };
     refresh();
+    void syncVideosTriggeredToday();
     window.addEventListener(ACTIVITY_UPDATED_EVENT, refresh);
     window.addEventListener("storage", refresh);
     return () => {
@@ -79,6 +81,8 @@ export default function DashboardPage() {
   );
 
   const handleFilesChange = useCallback((files: TestFileInfo[]) => {
+    void syncVideosTriggeredToday();
+
     const linkedFilename = new URLSearchParams(window.location.search).get("file");
     const linkedFile = linkedFilename
       ? files.find((file) => file.name === linkedFilename)

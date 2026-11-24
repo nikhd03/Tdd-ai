@@ -3,8 +3,10 @@ import type { ActivityEvent } from "./types";
 export const ACTIVITY_STORAGE_KEY = "tdd-ai.activity-events";
 export const ACTIVITY_UPDATED_EVENT = "tdd-ai:activity-updated";
 export const VIDEO_TRIGGERS_STORAGE_KEY = "tdd-ai.video-triggers";
+const VIDEO_TRIGGERS_GET_WEBHOOK_URL = 'https://ai-automation-stage.oomnieye.com/webhook/video-triggers-count';
 
 const MAX_ACTIVITY_EVENTS = 100;
+let videoTriggerSyncRequest: Promise<number> | null = null;
 
 function isActivityEvent(value: unknown): value is ActivityEvent {
   if (!value || typeof value !== "object") return false;
@@ -79,6 +81,19 @@ function todayKey(): string {
   return `${year}-${month}-${day}`;
 }
 
+function cacheVideoTriggerCount(date: string, count: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      VIDEO_TRIGGERS_STORAGE_KEY,
+      JSON.stringify({ date, count } satisfies VideoTriggerStore),
+    );
+    window.dispatchEvent(new CustomEvent(ACTIVITY_UPDATED_EVENT));
+  } catch {
+    // Keep the in-memory KPI usable when browser storage is unavailable.
+  }
+}
+
 export function recordVideoTrigger(): number {
   if (typeof window === "undefined") return 0;
   try {
@@ -89,8 +104,7 @@ export function recordVideoTrigger(): number {
       parsed?.date === date
         ? { date, count: Number(parsed.count) + 1 }
         : { date, count: 1 };
-    window.localStorage.setItem(VIDEO_TRIGGERS_STORAGE_KEY, JSON.stringify(next));
-    window.dispatchEvent(new CustomEvent(ACTIVITY_UPDATED_EVENT));
+    cacheVideoTriggerCount(next.date, next.count);
     return next.count;
   } catch {
     return 0;
@@ -107,4 +121,53 @@ export function getVideosTriggeredToday(): number {
   } catch {
     return 0;
   }
+}
+
+function countFromResponse(data: unknown): number | null {
+  const record =
+    Array.isArray(data) && data.length > 0 && typeof data[0] === "object" && data[0] !== null
+      ? (data[0] as Record<string, unknown>)
+      : data && typeof data === "object"
+        ? (data as Record<string, unknown>)
+        : null;
+  const count = record?.count;
+  return typeof count === "number" && Number.isFinite(count) && count >= 0
+    ? count
+    : null;
+}
+
+export function syncVideosTriggeredToday(): Promise<number> {
+  if (typeof window === "undefined") return Promise.resolve(0);
+  if (videoTriggerSyncRequest) return videoTriggerSyncRequest;
+
+  const date = todayKey();
+  const fallbackCount = getVideosTriggeredToday();
+  const request = (async () => {
+    try {
+      const url = new URL(VIDEO_TRIGGERS_GET_WEBHOOK_URL);
+      url.searchParams.set("date", date);
+      const response = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "ngrok-skip-browser-warning": "true",
+        },
+      });
+      if (!response.ok) return fallbackCount;
+
+      const data: unknown = await response.json();
+      const count = countFromResponse(data);
+      if (count === null) return fallbackCount;
+
+      cacheVideoTriggerCount(date, count);
+      return count;
+    } catch {
+      return fallbackCount;
+    } finally {
+      videoTriggerSyncRequest = null;
+    }
+  })();
+  videoTriggerSyncRequest = request;
+  return request;
 }
