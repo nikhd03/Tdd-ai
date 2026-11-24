@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, listTestFiles, VM_API_URL } from "@/lib/api";
+import FileLinkOptions from "@/components/FileLinkOptions";
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format";
-import type { TestFileInfo } from "@/lib/types";
+import type { ActivityEvent, PipelineStatus, TestFileInfo } from "@/lib/types";
 
 const AUTO_REFRESH_MS = 10_000;
 
@@ -14,9 +15,18 @@ interface TestFileExplorerProps {
   refreshSignal?: number;
   /** Receives every freshly loaded list (lets the parent keep the selected file's metadata in sync). */
   onFilesChange?: (files: TestFileInfo[]) => void;
+  onHealthChange?: (status: PipelineStatus, lastUpdated: string | null) => void;
+  onActivity?: (event: Omit<ActivityEvent, "id" | "timestamp">) => void;
 }
 
-export default function TestFileExplorer({ selectedName, onSelect, refreshSignal = 0, onFilesChange }: TestFileExplorerProps) {
+export default function TestFileExplorer({
+  selectedName,
+  onSelect,
+  refreshSignal = 0,
+  onFilesChange,
+  onHealthChange,
+  onActivity,
+}: TestFileExplorerProps) {
   const [files, setFiles] = useState<TestFileInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -30,9 +40,13 @@ export default function TestFileExplorer({ selectedName, onSelect, refreshSignal
   const knownNames = useRef<Set<string> | null>(null);
   const inFlight = useRef<AbortController | null>(null);
   const onFilesChangeRef = useRef(onFilesChange);
+  const onHealthChangeRef = useRef(onHealthChange);
+  const onActivityRef = useRef(onActivity);
   useEffect(() => {
     onFilesChangeRef.current = onFilesChange;
-  }, [onFilesChange]);
+    onHealthChangeRef.current = onHealthChange;
+    onActivityRef.current = onActivity;
+  }, [onFilesChange, onHealthChange, onActivity]);
 
   const load = useCallback(async (mode: "initial" | "manual" | "auto") => {
     if (inFlight.current) {
@@ -41,6 +55,7 @@ export default function TestFileExplorer({ selectedName, onSelect, refreshSignal
     }
     const controller = new AbortController();
     inFlight.current = controller;
+    onHealthChangeRef.current?.("Syncing", null);
     if (mode === "initial") setLoading(true);
     else setRefreshing(true);
 
@@ -59,10 +74,21 @@ export default function TestFileExplorer({ selectedName, onSelect, refreshSignal
       setFiles(list);
       onFilesChangeRef.current?.(list);
       setError(null);
-      setLastUpdated(new Date());
+      const updated = new Date();
+      setLastUpdated(updated);
+      onHealthChangeRef.current?.("Online", updated.toISOString());
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setError(err instanceof ApiError || err instanceof Error ? err.message : "Failed to load files.");
+      const message = err instanceof ApiError || err instanceof Error ? err.message : "Failed to load files.";
+      setError(message);
+      onHealthChangeRef.current?.("Offline", null);
+      onActivityRef.current?.({
+        category: "error",
+        status: "error",
+        source: "VM Server",
+        title: "Could not load generated files",
+        message,
+      });
     } finally {
       if (inFlight.current === controller) {
         inFlight.current = null;
@@ -208,27 +234,31 @@ export default function TestFileExplorer({ selectedName, onSelect, refreshSignal
               const isNew = newNames.has(file.name);
               return (
                 <li key={file.name}>
-                  <button
-                    type="button"
-                    onClick={() => handleSelect(file)}
-                    aria-current={selected ? "true" : undefined}
-                    className={`file-row${selected ? " is-selected" : ""}`}
-                  >
-                    <FileBadge name={file.name} />
-                    <div className="file-row-content">
-                      <div className="file-row-title">
-                        <span className="truncate" title={file.name}>
-                          {file.name}
-                        </span>
-                        {isNew && <span className="status-chip">New</span>}
+                  <div className={`file-row${selected ? " is-selected" : ""}`}>
+                    <button
+                      type="button"
+                      onClick={() => handleSelect(file)}
+                      aria-current={selected ? "true" : undefined}
+                      className="file-row-select"
+                      title={`View ${file.name}`}
+                    >
+                      <FileBadge name={file.name} />
+                      <div className="file-row-content">
+                        <div className="file-row-title">
+                          <span className="truncate" title={file.name}>
+                            {file.name}
+                          </span>
+                          {isNew && <span className="status-chip">New</span>}
+                        </div>
+                        <div className="file-row-meta">
+                          <span title={formatDateTime(file.createdAt)}>{formatRelative(file.createdAt, now) || formatDateTime(file.createdAt)}</span>
+                          <span>·</span>
+                          <span>{formatBytes(file.size)}</span>
+                        </div>
                       </div>
-                      <div className="file-row-meta">
-                        <span title={formatDateTime(file.createdAt)}>{formatRelative(file.createdAt, now) || formatDateTime(file.createdAt)}</span>
-                        <span>·</span>
-                        <span>{formatBytes(file.size)}</span>
-                      </div>
-                    </div>
-                  </button>
+                    </button>
+                    <FileLinkOptions filename={file.name} onActivity={onActivity} />
+                  </div>
                 </li>
               );
             })}

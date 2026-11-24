@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent } from "react";
 import { formatBytes } from "@/lib/format";
-import type { UploadStatus } from "@/lib/types";
+import type { ActivityEvent, UploadStatus } from "@/lib/types";
+import { recordVideoTrigger } from "@/lib/activity";
 
 const UPLOAD_ENDPOINT = process.env.NEXT_PUBLIC_UPLOAD_ENDPOINT ?? "";
 const FIELD_NAME = process.env.NEXT_PUBLIC_UPLOAD_FIELD_NAME || "file";
@@ -18,11 +19,16 @@ const FILE_FETCH_WEBHOOK = "https://ai-automation-stage.oomnieye.com/webhook/fil
 interface VideoUploaderProps {
   /** Called after the endpoint accepts the upload. */
   onUploaded?: (file: File | null, response: unknown) => void;
+  /** Emits structured pipeline activity for the dashboard feed. */
+  onActivity?: (event: Omit<ActivityEvent, "id" | "timestamp">) => void;
 }
 
 interface DriveItem {
   id: string;
   name: string;
+  size?: number | string;
+  type?: string;
+  mimeType?: string;
 }
 
 function getExtension(name: string): string {
@@ -56,7 +62,7 @@ function messageFromResponse(xhr: XMLHttpRequest): { data: unknown; message: str
   }
 }
 
-export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
+export default function VideoUploader({ onUploaded, onActivity }: VideoUploaderProps) {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<UploadStatus>("idle");
   const [progress, setProgress] = useState(0);
@@ -105,10 +111,24 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
               typeof (item as Record<string, unknown>).name === "string",
           ),
         );
+        onActivity?.({
+          category: "folder",
+          status: "success",
+          source: "Google Drive",
+          title: "Google Drive folders loaded",
+          message: `${data.length} folder${data.length === 1 ? "" : "s"} available`,
+        });
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
         setFolders([]);
         setDriveMessage(error instanceof Error ? error.message : "Could not load Google Drive folders.");
+        onActivity?.({
+          category: "error",
+          status: "error",
+          source: "Google Drive",
+          title: "Could not load Google Drive folders",
+          message: error instanceof Error ? error.message : undefined,
+        });
       } finally {
         if (!controller.signal.aborted) setFolderLoading(false);
       }
@@ -125,6 +145,14 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
     setFiles([]);
     setDriveMessage(null);
     if (!folder) return;
+    onActivity?.({
+      category: "folder",
+      status: "success",
+      source: "Google Drive",
+      title: `Folder selected: ${folder.name}`,
+      message: folder.id,
+      metadata: { folderId: folder.id, folderName: folder.name },
+    });
 
     setFileLoading(true);
     try {
@@ -141,13 +169,23 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
       const data: unknown = await response.json();
       if (!Array.isArray(data)) throw new Error("Files webhook did not return a list.");
       setFiles(
-        data.filter(
-          (item): item is DriveItem =>
-            typeof item === "object" &&
-            item !== null &&
-            typeof (item as Record<string, unknown>).id === "string" &&
-            typeof (item as Record<string, unknown>).name === "string",
-        ),
+        data.flatMap((item): DriveItem[] => {
+          if (!item || typeof item !== "object") return [];
+          const record = item as Record<string, unknown>;
+          if (typeof record.id !== "string" || typeof record.name !== "string") return [];
+          return [{
+            id: record.id,
+            name: record.name,
+            size: typeof record.size === "number" || typeof record.size === "string" ? record.size : undefined,
+            type: typeof record.type === "string" ? record.type : undefined,
+            mimeType:
+              typeof record.mimeType === "string"
+                ? record.mimeType
+                : typeof record.mime_type === "string"
+                  ? record.mime_type
+                  : undefined,
+          }];
+        }),
       );
     } catch (error) {
       setFiles([]);
@@ -228,6 +266,15 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
       setStatus("uploading");
       setProgress(0);
       setDriveMessage(null);
+      recordVideoTrigger();
+      onActivity?.({
+        category: "upload",
+        status: "started",
+        source: "Google Drive",
+        title: "Drive video triggered",
+        message: selectedDriveFile.name,
+        metadata: { fileId: selectedDriveFile.id, fileName: selectedDriveFile.name },
+      });
 
       void fetch(FILE_FETCH_WEBHOOK, {
         method: "POST",
@@ -253,11 +300,27 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
           setProgress(100);
           setStatus("success");
           setDriveMessage(`Selected file sent: ${selectedDriveFile.name}`);
+          onActivity?.({
+            category: "upload",
+            status: "success",
+            source: "Google Drive",
+            title: "Drive video processed",
+            message: selectedDriveFile.name,
+            metadata: { fileId: selectedDriveFile.id, fileName: selectedDriveFile.name },
+          });
           onUploaded?.(null, data);
         })
         .catch((error: unknown) => {
           setStatus("error");
           setDriveMessage(error instanceof Error ? error.message : "Could not send the selected file.");
+          onActivity?.({
+            category: "error",
+            status: "error",
+            source: "Google Drive",
+            title: "Drive video trigger failed",
+            message: error instanceof Error ? error.message : undefined,
+            metadata: { fileId: selectedDriveFile.id, fileName: selectedDriveFile.name },
+          });
         });
       return;
     }
@@ -275,6 +338,15 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
     form.append("mimeType", file.type || "application/octet-stream");
     form.append("size", String(file.size));
     form.append("uploadedAt", new Date().toISOString());
+    recordVideoTrigger();
+    onActivity?.({
+      category: "upload",
+      status: "started",
+      source: "Local",
+      title: "Local video upload started",
+      message: file.name,
+      metadata: { fileName: file.name, size: file.size, type: file.type || "application/octet-stream" },
+    });
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
@@ -296,6 +368,14 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
             ? serverMsg
             : `"${file.name}" uploaded. The n8n workflow will generate tests; they will appear in the file list.`,
         );
+        onActivity?.({
+          category: "upload",
+          status: "success",
+          source: "Local",
+          title: "Local video uploaded",
+          message: file.name,
+          metadata: { fileName: file.name, size: file.size, type: file.type || "application/octet-stream" },
+        });
         onUploaded?.(file, data);
       } else {
         setStatus("error");
@@ -306,6 +386,14 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
               ? " (File is larger than the endpoint allows.)"
               : "";
         setMessage(`Upload failed: ${serverMsg ?? `HTTP ${xhr.status}`}${hint}`);
+        onActivity?.({
+          category: "error",
+          status: "error",
+          source: "Local",
+          title: "Local video upload failed",
+          message: serverMsg ?? `HTTP ${xhr.status}`,
+          metadata: { fileName: file.name, httpStatus: xhr.status },
+        });
       }
     };
     xhr.onerror = () => {
@@ -314,6 +402,13 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
       setMessage(
         "Network error during upload. Check the endpoint URL and that it allows CORS from this site (n8n Webhook → Options → Allowed Origins).",
       );
+      onActivity?.({
+        category: "error",
+        status: "error",
+        source: "Local",
+        title: "Local upload network error",
+        message: file.name,
+      });
     };
     xhr.onabort = () => {
       xhrRef.current = null;
@@ -395,6 +490,32 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
             </select>
           </div>
         </div>
+
+        {selectedFolder && (
+          <div className="drive-selection-summary">
+            <div>
+              <span className="selection-label">Selected folder</span>
+              <strong>{selectedFolder.name}</strong>
+            </div>
+            {selectedDriveFile && (
+              <div className="min-w-0">
+                <span className="selection-label">Selected video</span>
+                <strong className="truncate" title={selectedDriveFile.name}>{selectedDriveFile.name}</strong>
+                {(selectedDriveFile.size || selectedDriveFile.type || selectedDriveFile.mimeType) && (
+                  <span className="selection-meta">
+                    {selectedDriveFile.size
+                      ? typeof selectedDriveFile.size === "number"
+                        ? formatBytes(selectedDriveFile.size)
+                        : selectedDriveFile.size
+                      : ""}
+                    {selectedDriveFile.size && (selectedDriveFile.type || selectedDriveFile.mimeType) ? " · " : ""}
+                    {selectedDriveFile.mimeType || selectedDriveFile.type || ""}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {driveMessage && (
           <p role="status" className="notice notice-neutral drive-notice">{driveMessage}</p>

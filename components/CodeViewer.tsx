@@ -2,13 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, downloadTestFile, getTestFile, saveBlob } from "@/lib/api";
+import FileLinkOptions from "@/components/FileLinkOptions";
 import { formatBytes, formatDateTime, languageFromFilename } from "@/lib/format";
-import type { TestFileContent, TestFileInfo } from "@/lib/types";
+import type { ActivityEvent, TestFileContent, TestFileInfo } from "@/lib/types";
 
 interface CodeViewerProps {
   file: TestFileInfo | null;
   onClose?: () => void;
   modal?: boolean;
+  autoDownload?: boolean;
+  onActivity?: (event: Omit<ActivityEvent, "id" | "timestamp">) => void;
 }
 
 type LoadState =
@@ -39,13 +42,20 @@ async function copyText(text: string): Promise<void> {
   if (!ok) throw new Error("Copy command was rejected by the browser.");
 }
 
-export default function CodeViewer({ file, onClose, modal = false }: CodeViewerProps) {
+export default function CodeViewer({
+  file,
+  onClose,
+  modal = false,
+  autoDownload = false,
+  onActivity,
+}: CodeViewerProps) {
   const [state, setState] = useState<LoadState>({ kind: "empty" });
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoDownloadedFile = useRef<string | null>(null);
 
   const name = file?.name ?? null;
 
@@ -59,7 +69,28 @@ export default function CodeViewer({ file, onClose, modal = false }: CodeViewerP
     const controller = new AbortController();
     setState({ kind: "loading" });
     getTestFile(name, controller.signal)
-      .then((data) => setState({ kind: "ready", data }))
+      .then((data) => {
+        setState({ kind: "ready", data });
+        if (autoDownload && autoDownloadedFile.current !== name) {
+          autoDownloadedFile.current = name;
+          saveBlob(new Blob([data.content], { type: "text/plain;charset=utf-8" }), name);
+          onActivity?.({
+            category: "download",
+            status: "success",
+            source: "VM Server",
+            title: "Shared file automatically downloaded",
+            message: name,
+          });
+        }
+        onActivity?.({
+          category: "view",
+          status: "success",
+          source: "VM Server",
+          title: "Generated file viewed",
+          message: name,
+          metadata: { fileName: name },
+        });
+      })
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setState({
@@ -70,7 +101,7 @@ export default function CodeViewer({ file, onClose, modal = false }: CodeViewerP
       });
     return () => controller.abort();
     // file.modifiedAt changes -> refetch so the viewer stays in sync after regeneration
-  }, [name, file?.modifiedAt, file?.size, reloadKey]);
+  }, [name, file?.modifiedAt, file?.size, reloadKey, autoDownload, onActivity]);
 
   useEffect(() => () => {
     if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -88,12 +119,19 @@ export default function CodeViewer({ file, onClose, modal = false }: CodeViewerP
     try {
       await copyText(state.data.content);
       setCopied(true);
+      onActivity?.({
+        category: "copy",
+        status: "success",
+        source: "VM Server",
+        title: "Generated code copied",
+        message: name ?? undefined,
+      });
       if (copyTimer.current) clearTimeout(copyTimer.current);
       copyTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not copy to clipboard.");
     }
-  }, [state]);
+  }, [state, name, onActivity]);
 
   const handleDownload = useCallback(async () => {
     if (!name) return;
@@ -101,17 +139,38 @@ export default function CodeViewer({ file, onClose, modal = false }: CodeViewerP
     // Content already loaded: save locally, no extra request
     if (state.kind === "ready") {
       saveBlob(new Blob([state.data.content], { type: "text/plain;charset=utf-8" }), name);
+      onActivity?.({
+        category: "download",
+        status: "success",
+        source: "VM Server",
+        title: "Generated file downloaded",
+        message: name,
+      });
       return;
     }
     setDownloading(true);
     try {
       await downloadTestFile(name);
+      onActivity?.({
+        category: "download",
+        status: "success",
+        source: "VM Server",
+        title: "Generated file downloaded",
+        message: name,
+      });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Download failed.");
+      onActivity?.({
+        category: "error",
+        status: "error",
+        source: "VM Server",
+        title: "Generated file download failed",
+        message: err instanceof Error ? err.message : "Download failed.",
+      });
     } finally {
       setDownloading(false);
     }
-  }, [name, state]);
+  }, [name, state, onActivity]);
 
   const canPreviewFail = state.kind === "error" && (state.status === 413 || state.status === 415);
 
@@ -141,6 +200,7 @@ export default function CodeViewer({ file, onClose, modal = false }: CodeViewerP
               Close
             </button>
           )}
+          {name && <FileLinkOptions filename={name} onActivity={onActivity} />}
           <button
             type="button"
             onClick={handleCopy}

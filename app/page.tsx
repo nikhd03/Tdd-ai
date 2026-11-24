@@ -1,25 +1,141 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import VideoUploader from "@/components/VideoUploader";
 import TestFileExplorer from "@/components/TestFileExplorer";
 import CodeViewer from "@/components/CodeViewer";
+import KpiBar from "@/components/KpiBar";
+import ActivityFeed from "@/components/ActivityFeed";
 import { VM_API_URL } from "@/lib/api";
-import type { TestFileInfo } from "@/lib/types";
+import {
+  ACTIVITY_UPDATED_EVENT,
+  appendActivity,
+  getVideosTriggeredToday,
+  loadActivities,
+} from "@/lib/activity";
+import type {
+  ActivityEvent,
+  DashboardKpis,
+  PipelineStatus,
+  TestFileInfo,
+} from "@/lib/types";
 
 export default function DashboardPage() {
   const [selected, setSelected] = useState<TestFileInfo | null>(null);
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [darkMode, setDarkMode] = useState(false);
+  const [activities, setActivities] = useState<ActivityEvent[]>([]);
+  const [kpis, setKpis] = useState<DashboardKpis>({
+    totalGeneratedFiles: 0,
+    specCount: 0,
+    featureCount: 0,
+    otherCount: 0,
+    videosTriggeredToday: 0,
+    pipelineStatus: "Syncing",
+    lastUpdated: null,
+  });
+  const knownFiles = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    const refresh = () => {
+      setActivities(loadActivities());
+      setKpis((current) => ({
+        ...current,
+        videosTriggeredToday: getVideosTriggeredToday(),
+      }));
+    };
+    refresh();
+    window.addEventListener(ACTIVITY_UPDATED_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(ACTIVITY_UPDATED_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
 
   // Keep the selected file's metadata current; clear it if the file was removed on the VM
+  const handleActivity = useCallback(
+    (event: Omit<ActivityEvent, "id" | "timestamp">) => {
+      appendActivity(event);
+      setActivities(loadActivities());
+      setKpis((current) => ({
+        ...current,
+        videosTriggeredToday: getVideosTriggeredToday(),
+      }));
+    },
+    [],
+  );
+
+  const handleHealthChange = useCallback(
+    (pipelineStatus: PipelineStatus, lastUpdated: string | null) => {
+      setKpis((current) => ({
+        ...current,
+        pipelineStatus,
+        lastUpdated: lastUpdated ?? current.lastUpdated,
+        videosTriggeredToday: getVideosTriggeredToday(),
+      }));
+    },
+    [],
+  );
+
   const handleFilesChange = useCallback((files: TestFileInfo[]) => {
+    const linkedFilename = new URLSearchParams(window.location.search).get("file");
+    const linkedFile = linkedFilename
+      ? files.find((file) => file.name === linkedFilename)
+      : undefined;
+    if (linkedFile) setSelected(linkedFile);
+
+    const names = new Set(files.map((file) => file.name));
+    if (knownFiles.current) {
+      const added = files.filter((file) => !knownFiles.current?.has(file.name));
+      added.forEach((file) => {
+        appendActivity({
+          category: "generated",
+          status: "success",
+          source: "VM Server",
+          title: "New generated file detected",
+          message: file.name,
+          metadata: {
+            fileName: file.name,
+            size: file.size,
+          },
+        });
+      });
+      if (added.length) setActivities(loadActivities());
+    }
+    knownFiles.current = names;
+
+    const specCount = files.filter((file) => file.name.toLowerCase().endsWith(".spec.ts")).length;
+    const featureCount = files.filter((file) => file.name.toLowerCase().endsWith(".feature")).length;
+    setKpis((current) => ({
+      ...current,
+      totalGeneratedFiles: files.length,
+      specCount,
+      featureCount,
+      otherCount: files.length - specCount - featureCount,
+      videosTriggeredToday: getVideosTriggeredToday(),
+    }));
+
     setSelected((current) => {
       if (!current) return current;
       const match = files.find((f) => f.name === current.name);
       if (!match) return null;
       return match.modifiedAt === current.modifiedAt && match.size === current.size ? current : match;
     });
+  }, []);
+
+  const handleFileSelect = useCallback((file: TestFileInfo) => {
+    setSelected(file);
+    const url = new URL(window.location.href);
+    url.searchParams.set("file", file.name);
+    window.history.replaceState(window.history.state, "", url);
+  }, []);
+
+  const handleViewerClose = useCallback(() => {
+    setSelected(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("file");
+    window.history.replaceState(window.history.state, "", url);
   }, []);
 
   const handleUploaded = useCallback(() => {
@@ -77,25 +193,36 @@ export default function DashboardPage() {
         </div>
       </header>
 
+      <div className="dashboard-kpi-wrap">
+        <KpiBar kpis={kpis} />
+      </div>
+
       <main className="dashboard-layout">
         <div className="left-column">
-          <VideoUploader onUploaded={handleUploaded} />
+          <VideoUploader onUploaded={handleUploaded} onActivity={handleActivity} />
         </div>
 
         <div className="viewer-column">
           <div className="explorer-panel-wrap">
             <TestFileExplorer
               selectedName={selected?.name ?? null}
-              onSelect={setSelected}
+              onSelect={handleFileSelect}
               refreshSignal={refreshSignal}
               onFilesChange={handleFilesChange}
+              onHealthChange={handleHealthChange}
+              onActivity={handleActivity}
             />
           </div>
+          <ActivityFeed
+            events={activities}
+            onClear={() => setActivities([])}
+          />
           {selected && (
             <CodeViewer
               file={selected}
               modal
-              onClose={() => setSelected(null)}
+              onClose={handleViewerClose}
+              onActivity={handleActivity}
             />
           )}
         </div>
