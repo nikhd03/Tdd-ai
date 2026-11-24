@@ -226,6 +226,10 @@ pre {
   gap: 20px;
 }
 
+.left-column > .panel {
+  flex: 0 0 auto;
+}
+
 .viewer-column {
   min-width: 0;
 }
@@ -261,6 +265,38 @@ pre {
 
 .panel-body {
   padding: 16px;
+}
+
+.drive-select-grid {
+  margin-bottom: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.field-block {
+  min-width: 0;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-main);
+  font-size: var(--font-size-body-sm);
+  font-weight: 500;
+}
+
+.select-input {
+  cursor: pointer;
+}
+
+.select-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.drive-notice {
+  margin: 0 0 16px;
 }
 
 .button {
@@ -349,8 +385,8 @@ pre {
 }
 
 .dropzone {
-  min-height: 148px;
-  padding: 20px 16px;
+  min-height: 112px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -725,6 +761,29 @@ pre {
   flex-direction: column;
 }
 
+.viewer-modal-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  padding: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-app) 72%, transparent);
+  backdrop-filter: blur(5px);
+}
+
+.viewer-modal-panel {
+  width: min(1100px, calc(100vw - 64px));
+  height: min(800px, calc(100vh - 64px));
+  min-height: 320px;
+  box-shadow: 0 24px 80px color-mix(in srgb, var(--text-main) 24%, transparent);
+}
+
+.viewer-close {
+  border-color: var(--border-light);
+}
+
 .viewer-header {
   min-height: 72px;
 }
@@ -813,7 +872,7 @@ pre {
 .explorer-panel-wrap {
   min-height: 320px;
   display: flex;
-  flex: 1;
+  height: 100%;
 }
 
 @keyframes pulse {
@@ -827,10 +886,6 @@ pre {
 @media (min-width: 1024px) {
   .dashboard-layout {
     min-height: calc(100vh - 88px);
-  }
-
-  .left-column {
-    max-height: calc(100vh - 136px);
   }
 
   .explorer-panel {
@@ -871,6 +926,19 @@ pre {
 }
 
 @media (max-width: 640px) {
+  .viewer-modal-backdrop {
+    padding: 8px;
+  }
+
+  .viewer-modal-panel {
+    width: calc(100vw - 16px);
+    height: calc(100vh - 16px);
+  }
+
+  .drive-select-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .header-inner {
     width: calc(100% - 32px);
     min-height: 80px;

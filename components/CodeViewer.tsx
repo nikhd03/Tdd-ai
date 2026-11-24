@@ -7,6 +7,8 @@ import type { TestFileContent, TestFileInfo } from "@/lib/types";
 
 interface CodeViewerProps {
   file: TestFileInfo | null;
+  onClose?: () => void;
+  modal?: boolean;
 }
 
 type LoadState =
@@ -37,7 +39,7 @@ async function copyText(text: string): Promise<void> {
   if (!ok) throw new Error("Copy command was rejected by the browser.");
 }
 
-export default function CodeViewer({ file }: CodeViewerProps) {
+export default function CodeViewer({ file, onClose, modal = false }: CodeViewerProps) {
   const [state, setState] = useState<LoadState>({ kind: "empty" });
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -113,8 +115,8 @@ export default function CodeViewer({ file }: CodeViewerProps) {
 
   const canPreviewFail = state.kind === "error" && (state.status === 413 || state.status === 415);
 
-  return (
-    <section className="panel viewer-panel">
+  const viewer = (
+    <section className={`panel viewer-panel${modal ? " viewer-modal-panel" : ""}`}>
       <header className="panel-header viewer-header">
         <div className="panel-header-copy">
           <h2 className="card-title viewer-file-name" title={name ?? undefined}>
@@ -128,6 +130,17 @@ export default function CodeViewer({ file }: CodeViewerProps) {
           )}
         </div>
         <div className="viewer-actions">
+          {modal && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="button button-secondary viewer-close"
+              aria-label="Close code viewer"
+              title="Close"
+            >
+              Close
+            </button>
+          )}
           <button
             type="button"
             onClick={handleCopy}
@@ -215,4 +228,34 @@ export default function CodeViewer({ file }: CodeViewerProps) {
       </div>
     </section>
   );
+
+  useEffect(() => {
+    if (!modal) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [modal, onClose]);
+
+  if (modal) {
+    return (
+      <div
+        className="viewer-modal-backdrop"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose?.();
+        }}
+      >
+        {viewer}
+      </div>
+    );
+  }
+
+  return viewer;
 }

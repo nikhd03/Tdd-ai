@@ -80,6 +80,9 @@ export default function DashboardPage() {
       <main className="dashboard-layout">
         <div className="left-column">
           <VideoUploader onUploaded={handleUploaded} />
+        </div>
+
+        <div className="viewer-column">
           <div className="explorer-panel-wrap">
             <TestFileExplorer
               selectedName={selected?.name ?? null}
@@ -88,10 +91,13 @@ export default function DashboardPage() {
               onFilesChange={handleFilesChange}
             />
           </div>
-        </div>
-
-        <div className="viewer-column">
-          <CodeViewer file={selected} />
+          {selected && (
+            <CodeViewer
+              file={selected}
+              modal
+              onClose={() => setSelected(null)}
+            />
+          )}
         </div>
       </main>
     </div>

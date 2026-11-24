@@ -11,10 +11,18 @@ const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 const ALLOWED_EXTENSIONS = [".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg", ".ogv", ".3gp"];
 const ACCEPT = ["video/*", ...ALLOWED_EXTENSIONS].join(",");
+const FOLDER_WEBHOOK = "https://ai-automation-stage.oomnieye.com/webhook/get_folder_name";
+const FILES_WEBHOOK = "https://ai-automation-stage.oomnieye.com/webhook/Get_file";
+const FILE_FETCH_WEBHOOK = "https://ai-automation-stage.oomnieye.com/webhook/file_fetch";
 
 interface VideoUploaderProps {
   /** Called after the endpoint accepts the upload. */
-  onUploaded?: (file: File, response: unknown) => void;
+  onUploaded?: (file: File | null, response: unknown) => void;
+}
+
+interface DriveItem {
+  id: string;
+  name: string;
 }
 
 function getExtension(name: string): string {
@@ -54,6 +62,13 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [folders, setFolders] = useState<DriveItem[]>([]);
+  const [files, setFiles] = useState<DriveItem[]>([]);
+  const [selectedFolder, setSelectedFolder] = useState<DriveItem | null>(null);
+  const [selectedDriveFile, setSelectedDriveFile] = useState<DriveItem | null>(null);
+  const [folderLoading, setFolderLoading] = useState(true);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [driveMessage, setDriveMessage] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
@@ -61,8 +76,97 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
 
   useEffect(() => () => xhrRef.current?.abort(), []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const loadFolders = async () => {
+      setFolderLoading(true);
+      setDriveMessage(null);
+      try {
+        const response = await fetch(FOLDER_WEBHOOK, {
+          method: "POST",
+          cache: "no-store",
+          signal: controller.signal,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
+        });
+        if (!response.ok) throw new Error(`Folders webhook returned HTTP ${response.status}`);
+        const data: unknown = await response.json();
+        if (!Array.isArray(data)) throw new Error("Folders webhook did not return a list.");
+        setFolders(
+          data.filter(
+            (item): item is DriveItem =>
+              typeof item === "object" &&
+              item !== null &&
+              typeof (item as Record<string, unknown>).id === "string" &&
+              typeof (item as Record<string, unknown>).name === "string",
+          ),
+        );
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setFolders([]);
+        setDriveMessage(error instanceof Error ? error.message : "Could not load Google Drive folders.");
+      } finally {
+        if (!controller.signal.aborted) setFolderLoading(false);
+      }
+    };
+
+    void loadFolders();
+    return () => controller.abort();
+  }, []);
+
+  const selectFolder = async (folderId: string) => {
+    const folder = folders.find((item) => item.id === folderId) ?? null;
+    setSelectedFolder(folder);
+    setSelectedDriveFile(null);
+    setFiles([]);
+    setDriveMessage(null);
+    if (!folder) return;
+
+    setFileLoading(true);
+    try {
+      const response = await fetch(FILES_WEBHOOK, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id: folder.id, name: folder.name }),
+      });
+      if (!response.ok) throw new Error(`Files webhook returned HTTP ${response.status}`);
+      const data: unknown = await response.json();
+      if (!Array.isArray(data)) throw new Error("Files webhook did not return a list.");
+      setFiles(
+        data.filter(
+          (item): item is DriveItem =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof (item as Record<string, unknown>).id === "string" &&
+            typeof (item as Record<string, unknown>).name === "string",
+        ),
+      );
+    } catch (error) {
+      setFiles([]);
+      setDriveMessage(error instanceof Error ? error.message : "Could not load files from this folder.");
+    } finally {
+      setFileLoading(false);
+    }
+  };
+
+  const selectDriveFile = (fileId: string) => {
+    const driveFile = files.find((item) => item.id === fileId) ?? null;
+    setSelectedDriveFile(driveFile);
+    setDriveMessage(null);
+    if (driveFile) setFile(null);
+  };
+
   const selectFile = useCallback((candidate: File | undefined | null) => {
     if (!candidate) return;
+    setSelectedDriveFile(null);
     const error = validateFile(candidate);
     if (error) {
       setFile(null);
@@ -120,6 +224,44 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
   };
 
   const upload = () => {
+    if (selectedDriveFile) {
+      setStatus("uploading");
+      setProgress(0);
+      setDriveMessage(null);
+
+      void fetch(FILE_FETCH_WEBHOOK, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: selectedDriveFile.id,
+          name: selectedDriveFile.name,
+        }),
+      })
+        .then(async (response) => {
+          const text = await response.text();
+          let data: unknown = text;
+          try {
+            data = text ? JSON.parse(text) : null;
+          } catch {
+            data = text;
+          }
+          if (!response.ok) throw new Error(`File fetch webhook returned HTTP ${response.status}`);
+          setProgress(100);
+          setStatus("success");
+          setDriveMessage(`Selected file sent: ${selectedDriveFile.name}`);
+          onUploaded?.(null, data);
+        })
+        .catch((error: unknown) => {
+          setStatus("error");
+          setDriveMessage(error instanceof Error ? error.message : "Could not send the selected file.");
+        });
+      return;
+    }
+
     if (!file) return;
     if (!UPLOAD_ENDPOINT) {
       setStatus("error");
@@ -189,6 +331,7 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
   const cancel = () => xhrRef.current?.abort();
   const reset = () => {
     setFile(null);
+    setSelectedDriveFile(null);
     setStatus("idle");
     setProgress(0);
     setMessage(null);
@@ -209,6 +352,54 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
       </header>
 
       <div className="panel-body">
+        <div className="drive-select-grid">
+          <div className="field-block">
+            <label className="field-label" htmlFor="drive-folder">Google Drive folder</label>
+            <select
+              id="drive-folder"
+              className="input select-input"
+              value={selectedFolder?.id ?? ""}
+              onChange={(event) => void selectFolder(event.target.value)}
+              disabled={folderLoading}
+            >
+              <option value="">
+                {folderLoading ? "Loading folders..." : folders.length ? "Select a folder" : "No folders available"}
+              </option>
+              {folders.map((folder) => (
+                <option key={folder.id} value={folder.id}>{folder.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field-block">
+            <label className="field-label" htmlFor="drive-file">File</label>
+            <select
+              id="drive-file"
+              className="input select-input"
+              value={selectedDriveFile?.id ?? ""}
+              onChange={(event) => void selectDriveFile(event.target.value)}
+              disabled={!selectedFolder || fileLoading}
+            >
+              <option value="">
+                {fileLoading
+                  ? "Loading files..."
+                  : selectedFolder
+                    ? files.length
+                      ? "Select a file"
+                      : "No files available"
+                    : "Select a folder first"}
+              </option>
+              {files.map((driveFile) => (
+                <option key={driveFile.id} value={driveFile.id}>{driveFile.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {driveMessage && (
+          <p role="status" className="notice notice-neutral drive-notice">{driveMessage}</p>
+        )}
+
         <div
           role="button"
           tabIndex={0}
@@ -284,7 +475,7 @@ export default function VideoUploader({ onUploaded }: VideoUploaderProps) {
             <button
               type="button"
               onClick={upload}
-              disabled={!file}
+              disabled={!file && !selectedDriveFile}
               className="button button-primary"
             >
               Upload video
