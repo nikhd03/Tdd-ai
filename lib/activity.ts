@@ -6,7 +6,7 @@ export const VIDEO_TRIGGERS_STORAGE_KEY = "tdd-ai.video-triggers";
 const VIDEO_TRIGGERS_GET_WEBHOOK_URL = 'https://ai-automation-stage.oomnieye.com/webhook/video-triggers-count';
 
 const MAX_ACTIVITY_EVENTS = 100;
-let videoTriggerSyncRequest: Promise<number> | null = null;
+let videoTriggerSyncRequest: Promise<VideoTriggerCounts> | null = null;
 
 function isActivityEvent(value: unknown): value is ActivityEvent {
   if (!value || typeof value !== "object") return false;
@@ -71,6 +71,12 @@ export function clearActivities(): void {
 interface VideoTriggerStore {
   date: string;
   count: number;
+  totalCount: number;
+}
+
+export interface VideoTriggerCounts {
+  count: number;
+  totalCount: number;
 }
 
 function todayKey(): string {
@@ -81,16 +87,33 @@ function todayKey(): string {
   return `${year}-${month}-${day}`;
 }
 
-function cacheVideoTriggerCount(date: string, count: number): void {
+function cacheVideoTriggerCounts(date: string, counts: VideoTriggerCounts): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(
       VIDEO_TRIGGERS_STORAGE_KEY,
-      JSON.stringify({ date, count } satisfies VideoTriggerStore),
+      JSON.stringify({ date, ...counts } satisfies VideoTriggerStore),
     );
     window.dispatchEvent(new CustomEvent(ACTIVITY_UPDATED_EVENT));
   } catch {
     // Keep the in-memory KPI usable when browser storage is unavailable.
+  }
+}
+
+function readVideoTriggerCounts(): VideoTriggerCounts {
+  if (typeof window === "undefined") return { count: 0, totalCount: 0 };
+  try {
+    const raw = window.localStorage.getItem(VIDEO_TRIGGERS_STORAGE_KEY);
+    if (!raw) return { count: 0, totalCount: 0 };
+    const parsed = JSON.parse(raw) as Partial<VideoTriggerStore>;
+    const count = parsed.date === todayKey() ? Number(parsed.count) : 0;
+    const totalCount = Number(parsed.totalCount);
+    return {
+      count: Number.isFinite(count) && count >= 0 ? count : 0,
+      totalCount: Number.isFinite(totalCount) && totalCount >= 0 ? totalCount : 0,
+    };
+  } catch {
+    return { count: 0, totalCount: 0 };
   }
 }
 
@@ -100,11 +123,13 @@ export function recordVideoTrigger(): number {
     const date = todayKey();
     const raw = window.localStorage.getItem(VIDEO_TRIGGERS_STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<VideoTriggerStore>) : null;
-    const next: VideoTriggerStore =
-      parsed?.date === date
-        ? { date, count: Number(parsed.count) + 1 }
-        : { date, count: 1 };
-    cacheVideoTriggerCount(next.date, next.count);
+    const count = parsed?.date === date ? Number(parsed.count) : 0;
+    const totalCount = Number(parsed?.totalCount);
+    const next: VideoTriggerCounts = {
+      count: (Number.isFinite(count) && count >= 0 ? count : 0) + 1,
+      totalCount: (Number.isFinite(totalCount) && totalCount >= 0 ? totalCount : 0) + 1,
+    };
+    cacheVideoTriggerCounts(date, next);
     return next.count;
   } catch {
     return 0;
@@ -112,36 +137,40 @@ export function recordVideoTrigger(): number {
 }
 
 export function getVideosTriggeredToday(): number {
-  if (typeof window === "undefined") return 0;
-  try {
-    const raw = window.localStorage.getItem(VIDEO_TRIGGERS_STORAGE_KEY);
-    if (!raw) return 0;
-    const parsed = JSON.parse(raw) as Partial<VideoTriggerStore>;
-    return parsed.date === todayKey() ? Number(parsed.count) || 0 : 0;
-  } catch {
-    return 0;
-  }
+  return readVideoTriggerCounts().count;
 }
 
-function countFromResponse(data: unknown): number | null {
+export function getTotalVideosProcessed(): number {
+  return readVideoTriggerCounts().totalCount;
+}
+
+function countsFromResponse(data: unknown): Partial<VideoTriggerCounts> | null {
   const record =
     Array.isArray(data) && data.length > 0 && typeof data[0] === "object" && data[0] !== null
       ? (data[0] as Record<string, unknown>)
       : data && typeof data === "object"
         ? (data as Record<string, unknown>)
         : null;
-  const count = record?.count;
-  return typeof count === "number" && Number.isFinite(count) && count >= 0
-    ? count
-    : null;
+  if (!record) return null;
+
+  const count = record.count;
+  const totalCount = record.totalCount;
+  const counts: Partial<VideoTriggerCounts> = {};
+  if (typeof count === "number" && Number.isFinite(count) && count >= 0) {
+    counts.count = count;
+  }
+  if (typeof totalCount === "number" && Number.isFinite(totalCount) && totalCount >= 0) {
+    counts.totalCount = totalCount;
+  }
+  return Object.keys(counts).length > 0 ? counts : null;
 }
 
-export function syncVideosTriggeredToday(): Promise<number> {
-  if (typeof window === "undefined") return Promise.resolve(0);
+export function syncVideosTriggeredToday(): Promise<VideoTriggerCounts> {
+  if (typeof window === "undefined") return Promise.resolve({ count: 0, totalCount: 0 });
   if (videoTriggerSyncRequest) return videoTriggerSyncRequest;
 
   const date = todayKey();
-  const fallbackCount = getVideosTriggeredToday();
+  const fallbackCounts = readVideoTriggerCounts();
   const request = (async () => {
     try {
       const url = new URL(VIDEO_TRIGGERS_GET_WEBHOOK_URL);
@@ -154,16 +183,20 @@ export function syncVideosTriggeredToday(): Promise<number> {
           "ngrok-skip-browser-warning": "true",
         },
       });
-      if (!response.ok) return fallbackCount;
+      if (!response.ok) return fallbackCounts;
 
       const data: unknown = await response.json();
-      const count = countFromResponse(data);
-      if (count === null) return fallbackCount;
+      const counts = countsFromResponse(data);
+      if (!counts) return fallbackCounts;
 
-      cacheVideoTriggerCount(date, count);
-      return count;
+      const syncedCounts = {
+        count: counts.count ?? fallbackCounts.count,
+        totalCount: counts.totalCount ?? fallbackCounts.totalCount,
+      };
+      cacheVideoTriggerCounts(date, syncedCounts);
+      return syncedCounts;
     } catch {
-      return fallbackCount;
+      return fallbackCounts;
     } finally {
       videoTriggerSyncRequest = null;
     }

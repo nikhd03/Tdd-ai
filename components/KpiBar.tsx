@@ -21,7 +21,7 @@ export default function KpiBar({ kpis }: KpiBarProps) {
         <span className="kpi-caption">Total from VM</span>
       </article>
 
-      <article className="kpi-card">
+      {/* <article className="kpi-card">
         <span className="kpi-label">Tests / specs</span>
         <strong className="kpi-value">
           {kpis.specCount} <span className="kpi-divider">/</span> {kpis.featureCount}
@@ -29,12 +29,18 @@ export default function KpiBar({ kpis }: KpiBarProps) {
         <span className="kpi-caption">
           Specs / Features · {kpis.otherCount} other
         </span>
-      </article>
+      </article> */}
 
       <article className="kpi-card">
         <span className="kpi-label">Videos today</span>
         <strong className="kpi-value">{kpis.videosTriggeredToday}</strong>
         <span className="kpi-caption">n8n · Google Sheets</span>
+      </article>
+
+      <article className="kpi-card">
+        <span className="kpi-label">Total videos processed</span>
+        <strong className="kpi-value">{kpis.totalVideosProcessed}</strong>
+        <span className="kpi-caption">All-time processed via n8n</span>
       </article>
 
       <article className="kpi-card">

@@ -10,6 +10,7 @@ import { VM_API_URL } from "@/lib/api";
 import {
   ACTIVITY_UPDATED_EVENT,
   appendActivity,
+  getTotalVideosProcessed,
   getVideosTriggeredToday,
   loadActivities,
   syncVideosTriggeredToday,
@@ -32,6 +33,7 @@ export default function DashboardPage() {
     featureCount: 0,
     otherCount: 0,
     videosTriggeredToday: 0,
+    totalVideosProcessed: 0,
     pipelineStatus: "Syncing",
     lastUpdated: null,
   });
@@ -43,6 +45,7 @@ export default function DashboardPage() {
       setKpis((current) => ({
         ...current,
         videosTriggeredToday: getVideosTriggeredToday(),
+        totalVideosProcessed: getTotalVideosProcessed(),
       }));
     };
     refresh();
@@ -63,6 +66,7 @@ export default function DashboardPage() {
       setKpis((current) => ({
         ...current,
         videosTriggeredToday: getVideosTriggeredToday(),
+        totalVideosProcessed: getTotalVideosProcessed(),
       }));
     },
     [],
@@ -75,6 +79,7 @@ export default function DashboardPage() {
         pipelineStatus,
         lastUpdated: lastUpdated ?? current.lastUpdated,
         videosTriggeredToday: getVideosTriggeredToday(),
+        totalVideosProcessed: getTotalVideosProcessed(),
       }));
     },
     [],
@@ -118,6 +123,7 @@ export default function DashboardPage() {
       featureCount,
       otherCount: files.length - specCount - featureCount,
       videosTriggeredToday: getVideosTriggeredToday(),
+      totalVideosProcessed: getTotalVideosProcessed(),
     }));
 
     setSelected((current) => {

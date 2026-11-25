@@ -55,6 +55,7 @@ export interface DashboardKpis {
   featureCount: number;
   otherCount: number;
   videosTriggeredToday: number;
+  totalVideosProcessed: number;
   pipelineStatus: PipelineStatus;
   lastUpdated: string | null;
 }
